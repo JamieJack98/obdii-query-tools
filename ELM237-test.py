@@ -20,8 +20,8 @@ with serial.Serial(PORT, BAUD, timeout=2) as elm:
         time.sleep(0.2)
 
         elm.write(ENGINE_SPEED)
-        print(elm.read_until(b">").decode())
+        print(elm.read_until(b">").decode(), end=('\r'))
 
         elm.write(COOLANT_TEMP)
-        print(elm.read_until(b">").decode())
+        print(elm.read_until(b">").decode(), end=('\r'))
     

@@ -101,4 +101,10 @@ with serial.Serial(PORT, BAUD, timeout=2) as elm:
 
         coolant_temp = decode_coolant_temp(coolant_response)
 
-        print(f"RPM: {rpm:.0f} | Coolant: {coolant_temp} °C")
+        #Intake temperature
+        #elm.write(INTAKE_TEMP)
+        #intake_response = elm.read_until(b">").decode(errors="replace")
+
+        #intake_temp_rep = decode
+
+        #print(f"RPM: {rpm:.0f} | Coolant: {coolant_temp} °C")

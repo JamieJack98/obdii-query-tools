@@ -1,2 +1,3 @@
 .vscode/
-cpp_app/build
+esp_app/build
+.DS_Store

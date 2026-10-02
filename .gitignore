@@ -1,3 +1,4 @@
 .vscode/
 esp_app/build
+esp_app/main/build
 .DS_Store

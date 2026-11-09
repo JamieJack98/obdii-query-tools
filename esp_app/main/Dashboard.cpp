@@ -4,12 +4,14 @@
 #include "esp_lcd_io_spi.h"
 #include "esp_lcd_panel_dev.h"
 #include "esp_lcd_panel_ops.h"
-#include "esp_lcd_types.h"
 #include "esp_log.h"
 #include "esp_lvgl_port.h"
 #include "hal/spi_types.h"
 #include "soc/gpio_num.h"
+#include "widgets/bar/lv_bar.h"
+#include <cstddef>
 #include <cstdint>
+#include <string>
 
 namespace
 {
@@ -28,17 +30,11 @@ namespace
     const char* TAG = "mini_dashboard";
 }
 
-Dashboard::Dashboard() : 
-    m_engineLoad("0"),
-    m_intakeTemp("0"),
-    m_coolantTemp("0"),
-    m_screen(lv_screen_active())
-{
-    m_engineLoadHandle = lv_label_create(m_screen);
-    m_intakeTempHandle = lv_label_create(m_screen);
-    m_coolantTempHandle = lv_label_create(m_screen);
-}
-
+Dashboard::Dashboard()
+    : m_engineLoad("0"),
+      m_intakeTemp("0"),
+      m_coolantTemp("0")
+{}
 
 void Dashboard::initialise()
 {
@@ -58,8 +54,6 @@ void Dashboard::initialise()
     );
 
     // Configure communication with the LCD.
-    esp_lcd_panel_io_handle_t ioHandle = nullptr;
-
     esp_lcd_panel_io_spi_config_t ioConfig{};
     ioConfig.cs_gpio_num = PIN_CS;
     ioConfig.dc_gpio_num = PIN_DC;
@@ -73,13 +67,11 @@ void Dashboard::initialise()
         esp_lcd_new_panel_io_spi(
             static_cast<esp_lcd_spi_bus_handle_t>(SPI_HOST),
             &ioConfig,
-            &ioHandle
+            &m_ioHandle
         )
     );
 
      // Initialise the ILI9341 panel.
-    esp_lcd_panel_handle_t panelHandle = nullptr;
-
     esp_lcd_panel_dev_config_t panelConfig{};
     panelConfig.reset_gpio_num = PIN_RST;
     panelConfig.rgb_ele_order = LCD_RGB_ELEMENT_ORDER_RGB;
@@ -87,21 +79,21 @@ void Dashboard::initialise()
 
     ESP_ERROR_CHECK(
         esp_lcd_new_panel_ili9341(
-            ioHandle,
+            m_ioHandle,
             &panelConfig,
-            &panelHandle
+            &m_panelHandle
         )
     );
 
-    ESP_ERROR_CHECK(esp_lcd_panel_reset(panelHandle));
-    ESP_ERROR_CHECK(esp_lcd_panel_init(panelHandle));
+    ESP_ERROR_CHECK(esp_lcd_panel_reset(m_panelHandle));
+    ESP_ERROR_CHECK(esp_lcd_panel_init(m_panelHandle));
 
     // Diagnostic: no mirroring on either axis
     ESP_ERROR_CHECK(
-        esp_lcd_panel_mirror(panelHandle, true, false)
+        esp_lcd_panel_mirror(m_panelHandle, true, false)
     );
 
-    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(panelHandle, true));
+    ESP_ERROR_CHECK(esp_lcd_panel_disp_on_off(m_panelHandle, true));
 
     // 4. Initialise LVGL.
     const lvgl_port_cfg_t lvglConfig =
@@ -112,8 +104,8 @@ void Dashboard::initialise()
     // 5. Connect LVGL to the existing LCD panel.
     lvgl_port_display_cfg_t displayConfig{};
 
-    displayConfig.io_handle = ioHandle;
-    displayConfig.panel_handle = panelHandle;
+    displayConfig.io_handle = m_ioHandle;
+    displayConfig.panel_handle = m_panelHandle;
     displayConfig.buffer_size = SCREEN_WIDTH * BUFFER_LINES;
     displayConfig.double_buffer = true;
     displayConfig.hres = SCREEN_WIDTH;
@@ -128,9 +120,9 @@ void Dashboard::initialise()
     displayConfig.flags.buff_dma = true;
     displayConfig.flags.swap_bytes = false;
 
-    lv_display_t* display = lvgl_port_add_disp(&displayConfig);
+    m_display = lvgl_port_add_disp(&displayConfig);
 
-    if (display == nullptr)
+    if (m_display == nullptr)
     {
         ESP_LOGE(TAG, "Failed to register LVGL display");
         abort();
@@ -139,152 +131,195 @@ void Dashboard::initialise()
     // 6. Create the dashboard UI.
     if (lvgl_port_lock(0))
     {
-        lv_obj_t* screen = lv_screen_active();
+        m_screen = lv_screen_active();
 
+        if (m_screen == nullptr)
+        {
+            ESP_LOGE(TAG, "Failed to get active LVGL screen");
+            lvgl_port_unlock();
+            abort();
+        }
+
+        // Create Labels;
+        m_engineLoadHandle = lv_label_create(m_screen);
+        m_engineLoadBarHandle = lv_bar_create(m_screen);
+        m_intakeTempHandle = lv_label_create(m_screen);
+        m_coolantTempHandle = lv_label_create(m_screen);
+        
         // Black background.
         lv_obj_set_style_bg_color(
-            screen,
+            m_screen,
             lv_color_hex(0x000000),
             LV_PART_MAIN
         );
         lv_obj_set_style_bg_opa(
-            screen,
+            m_screen,
             LV_OPA_COVER,
             LV_PART_MAIN
         );
 
         // Dashboard title.
-        lv_obj_t* title = lv_label_create(screen);
-        lv_label_set_text(title, "MINI DASHBOARD");
+        m_dashboardTitle = lv_label_create(m_screen);
+        lv_label_set_text(m_dashboardTitle, "MINI DASHBOARD");
 
         lv_obj_set_style_text_color(
-            title,
+            m_dashboardTitle,
             lv_color_hex(0xFFFFFF),
             LV_PART_MAIN
         );
 
         lv_obj_set_style_text_font(
-            title,
+            m_dashboardTitle,
             &lv_font_montserrat_24,
             LV_PART_MAIN
         );
 
-        lv_obj_align(title, LV_ALIGN_TOP_MID, 0, 15);
+        lv_obj_align(m_dashboardTitle, LV_ALIGN_TOP_MID, 0, 15);
 
         ESP_LOGI(TAG, "Dashboard title created");
 
         // Engine Load Label
-        lv_obj_t* engineLoadText = lv_label_create(screen);
-        lv_label_set_text(engineLoadText, "ENGINE LOAD");
+        m_engineLoadTitle = lv_label_create(m_screen);
+        lv_label_set_text(m_engineLoadTitle, "ENGINE LOAD");
 
         lv_obj_set_style_text_color(
-            engineLoadText,
+            m_engineLoadTitle,
             lv_color_hex(0xFFFFFF),
             LV_PART_MAIN
         );
 
         lv_obj_set_style_text_font(
-            engineLoadText,
+            m_engineLoadTitle,
             &lv_font_montserrat_18,
             LV_PART_MAIN
         );
 
-        lv_obj_align(engineLoadText, LV_ALIGN_TOP_MID, 0, 70);
+        lv_obj_align(m_engineLoadTitle, LV_ALIGN_TOP_MID, 0, 70);
 
         // Engine Load Value
-        lv_obj_t* engineLoadVal = lv_label_create(screen);
-        lv_label_set_text(engineLoadVal, "70%");
-        lv_obj_align(engineLoadVal, LV_ALIGN_TOP_MID, 0, 95);
+        lv_label_set_text(m_engineLoadHandle, "0%");
+        lv_obj_align(m_engineLoadHandle, LV_ALIGN_TOP_MID, 0, 95);
 
         // Engine Load bar
-        lv_obj_t* loadBar = lv_bar_create(screen);
-        lv_obj_set_size(loadBar, 200, 10);
-        lv_obj_align(loadBar, LV_ALIGN_TOP_MID, 0, 110);
-        lv_bar_set_range(loadBar, 0, 100);
-        lv_bar_set_value(loadBar, 70, LV_ANIM_OFF);
+        lv_obj_set_size(m_engineLoadBarHandle, 200, 10);
+        lv_obj_align(m_engineLoadBarHandle, LV_ALIGN_TOP_MID, 0, 110);
+        lv_bar_set_range(m_engineLoadBarHandle, 0, 100);
+        lv_bar_set_value(m_engineLoadBarHandle, 70, LV_ANIM_OFF);
 
         lv_obj_set_style_bg_color(
-            loadBar, lv_color_hex(0x253141), LV_PART_MAIN);
+            m_engineLoadBarHandle, lv_color_hex(0x253141), LV_PART_MAIN);
 
         // Filled section.
         lv_obj_set_style_bg_color(
-        loadBar, lv_color_hex(0x38D996), LV_PART_INDICATOR);
+        m_engineLoadBarHandle, lv_color_hex(0x38D996), LV_PART_INDICATOR);
 
         // Intake Temp
-        lv_obj_t* intakeTempText = lv_label_create(screen);
-        lv_label_set_text(intakeTempText, "INTAKE TEMPERATURE");
+        m_intakeTitle = lv_label_create(m_screen);
+        lv_label_set_text(m_intakeTitle, "INTAKE TEMPERATURE");
 
         lv_obj_set_style_text_color(
-            intakeTempText,
+            m_intakeTitle,
             lv_color_hex(0xFFFFFF),
             LV_PART_MAIN
         );
 
         lv_obj_set_style_text_font(
-            intakeTempText,
+            m_intakeTitle,
             &lv_font_montserrat_18,
             LV_PART_MAIN
         );
 
-        lv_obj_align(intakeTempText, LV_ALIGN_TOP_MID, 0, 140);
+        lv_obj_align(m_intakeTitle, LV_ALIGN_TOP_MID, 0, 140);
 
         // Intake Value
-        lv_obj_t* intakeVal = lv_label_create(screen);
-        lv_label_set_text(intakeVal, "62°");
-        lv_obj_align(intakeVal, LV_ALIGN_TOP_MID, 0, 170);
+        lv_label_set_text(m_intakeTempHandle, "62°");
+        lv_obj_align(m_intakeTempHandle, LV_ALIGN_TOP_MID, 0, 170);
 
         // Coolant Temp
-        lv_obj_t* coolantTempText = lv_label_create(screen);
-        lv_label_set_text(coolantTempText, "COOLANT TEMPERATURE");
+        m_coolantTitle = lv_label_create(m_screen);
+        lv_label_set_text(m_coolantTitle, "COOLANT TEMPERATURE");
 
         lv_obj_set_style_text_color(
-            coolantTempText,
+            m_coolantTitle,
             lv_color_hex(0xFFFFFF),
             LV_PART_MAIN
         );
 
         lv_obj_set_style_text_font(
-            coolantTempText,
+            m_coolantTitle,
             &lv_font_montserrat_18,
             LV_PART_MAIN
         );
 
-        lv_obj_align(coolantTempText, LV_ALIGN_TOP_MID, 0, 210);
+        lv_obj_align(m_coolantTitle, LV_ALIGN_TOP_MID, 0, 210);
 
         // Coolant Value
-        lv_obj_t* coolantVal = lv_label_create(screen);
-        lv_label_set_text(coolantVal, "47°");
-        lv_obj_align(coolantVal, LV_ALIGN_TOP_MID, 0, 240);
+        lv_label_set_text(m_coolantTempHandle, "0°");
+        lv_obj_align(m_coolantTempHandle, LV_ALIGN_TOP_MID, 0, 240);
 
         lvgl_port_unlock();
     }
-}
-
-void Dashboard::updateEngineLoad(uint8_t& val)
-{
-    // Convert val to string
-    if (lvgl_port_lock(0))
+    else
     {
-        lvgl_port_unlock();
+        ESP_LOGE(TAG, "Could not lock LVGL");
+        abort();
     }
 }
 
-void Dashboard::updateIntakeTemp(uint8_t& val)
+void Dashboard::updateEngineLoad(const uint8_t& val)
 {
-    // Convert val to string
+    const int percent = (val > 100) ? 100 : val;
+
+    m_engineLoad = std::to_string(percent) + "%";
+
     if (lvgl_port_lock(0))
     {
+        lv_label_set_text(
+            m_engineLoadHandle,
+            m_engineLoad.c_str()
+        );
+
+        lv_bar_set_value(
+            m_engineLoadBarHandle,
+            percent,
+            LV_ANIM_OFF
+        );
+
         lvgl_port_unlock();
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Could not lock LVGL");
+        abort();
     }
 }
 
-void Dashboard::updateCoolantTemp(uint8_t& val)
+void Dashboard::updateIntakeTemp(const uint8_t& val)
 {
-    std:;string
-    // 6. Create the dashboard UI.
+    m_intakeTemp = std::to_string(val) + "°";
     if (lvgl_port_lock(0))
     {
-        lv_label_set_text(m_coolantTempHandle, "47°");
+        lv_label_set_text(m_intakeTempHandle, m_intakeTemp.c_str());
         lvgl_port_unlock();
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Could not lock LVGL");
+        abort();
+    }
+}
+
+void Dashboard::updateCoolantTemp(const uint8_t& val)
+{
+    m_coolantTemp = std::to_string(val) + "°";
+    if (lvgl_port_lock(0))
+    {
+        lv_label_set_text(m_coolantTempHandle, m_coolantTemp.c_str());
+        lvgl_port_unlock();
+    }
+    else
+    {
+        ESP_LOGE(TAG, "Could not lock LVGL");
+        abort();
     }
 }
